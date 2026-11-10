@@ -1,0 +1,49 @@
+id = "hostilenetworks"
+kind = "native-mod"
+name = "hostilenetworks"
+summary = "A Horizon port of hostilenetworks."
+description = """
+A port of [hostilenetworks](Shadows-of-Fire/Hostile-Neural-Networks) for Horizon.
+
+**Implemented so far**
+
+- The **Simulation Chamber → Prediction → Loot Fabricator** loop, with a Data
+- `hostilenetworks:sim_chamber` — 4 slots (model, input, base drop, prediction),
+- a 2,000,000 FE buffer, a menu type with 6 data slots, and the run rules below.
+- `hostilenetworks:loot_fabricator` — 17 slots (prediction + 16 outputs), a
+- ,000,000 FE buffer, a menu type with 5 data slots, and the palette that picks
+- the drop row.
+- `hostilenetworks:data_model` — the model (zombie) plus `data` and
+- `iterations`, in three registered item components.
+
+**Not yet ported**
+
+- Kill/break model upgrades (`data_gained`, the `living_death` hook, the
+- inventory/Deep Learner scan) — the tier table's `data_gained` column was
+- removed from `runtime.rs` because nothing in the slice uses it.
+- Blank-model attunement (`rightClickToAttune`) and the Model Framework's use.
+- The other 58 entity and 10 block models, their optional drops and the
+- silk-touch `upgrade_conditions`.
+- Deep Learner (curio, menu, HUD) and Fabrication Directive.
+- Data Center multiblock + Queue mode + redstone modes.
+
+Original copyright and licence notices are kept in this repository. Pinned to
+Horizon 1d63e0a and horizon-mixins 5a64af93. Help with the remaining slices is
+welcome.
+"""
+authors = ["AdLf0208"]
+owners = ["AdLf0208"]
+owner_ids = [107615167]
+license = "MIT"
+source = "https://github.com/AdLf0208/hostilenetworks"
+icon = "icons/hostilenetworks.png"
+categories = ["utility"]
+tags = ["port", "horizon"]
+
+[[versions]]
+version = "0.1.0"
+published = "2026-11-10"
+game = "26.3"
+file = "hostilenetworks-0.1.0.hnmod"
+sha256 = "a4e7a648b2c5669403455a299e1a23e47c53319b2d229da618e6a2f5926c0fa3"
+changelog = "First release"
