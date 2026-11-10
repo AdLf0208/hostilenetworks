@@ -1,0 +1,11 @@
+# Port-owned content mod for the Hostile Neural Networks slice: the Simulation
+# Chamber, the Loot Fabricator, Data Models, Predictions and the Prediction
+# Matrix. Models, textures, recipes, loot tables and lang are carried from
+# HostileNeuralNetworks-1.21.1-6.5.1.jar (Shadows-of-Fire, MIT); the Rust is a
+# clean-room rewrite.
+id = "hostilenetworks"
+name = "Hostile Neural Networks"
+version = "6.5.1"
+api = "0.2"
+side = "both"
+capabilities = ["registries"]

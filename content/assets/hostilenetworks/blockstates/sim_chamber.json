@@ -1,0 +1,46 @@
+{
+  "variants": {
+    "facing=north,open=false": {
+      "model": "hostilenetworks:block/sim_chamber"
+    },
+    "facing=north,open=true": {
+      "model": "hostilenetworks:block/sim_chamber"
+    },
+    "facing=east,open=false": {
+      "model": "hostilenetworks:block/sim_chamber",
+      "y": 90
+    },
+    "facing=east,open=true": {
+      "model": "hostilenetworks:block/sim_chamber",
+      "y": 90
+    },
+    "facing=south,open=false": {
+      "model": "hostilenetworks:block/sim_chamber",
+      "y": 180
+    },
+    "facing=south,open=true": {
+      "model": "hostilenetworks:block/sim_chamber",
+      "y": 180
+    },
+    "facing=west,open=false": {
+      "model": "hostilenetworks:block/sim_chamber",
+      "y": 270
+    },
+    "facing=west,open=true": {
+      "model": "hostilenetworks:block/sim_chamber",
+      "y": 270
+    },
+    "facing=up,open=false": {
+      "model": "hostilenetworks:block/sim_chamber"
+    },
+    "facing=up,open=true": {
+      "model": "hostilenetworks:block/sim_chamber"
+    },
+    "facing=down,open=false": {
+      "model": "hostilenetworks:block/sim_chamber"
+    },
+    "facing=down,open=true": {
+      "model": "hostilenetworks:block/sim_chamber"
+    }
+  }
+}

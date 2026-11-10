@@ -1,0 +1,19 @@
+[package]
+# Ported from: Hostile Neural Networks 1.21.1-6.5.1
+# (Shadows-of-Fire/Hostile-Neural-Networks, MIT), Minecraft Java 1.21.1
+# NeoForge. Clean-room Rust rewrite; local-only until the maintainer approves
+# publishing (ARCHITECTURE.md §8).
+name = "horizon-hostilenetworks"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+description = "Hostile Neural Networks for Horizon: data models, simulation and loot"
+
+[lib]
+# This exact source is also injected as a same-crate module by horizon-mixins.
+path = "mixins/hostilenetworks/runtime.rs"
+
+[workspace]
+members = ["tools/audit"]
+resolver = "2"
