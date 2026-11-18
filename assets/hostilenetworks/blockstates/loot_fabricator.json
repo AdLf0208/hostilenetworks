@@ -1,0 +1,46 @@
+{
+  "variants": {
+    "facing=north,open=false": {
+      "model": "hostilenetworks:block/loot_fabricator"
+    },
+    "facing=north,open=true": {
+      "model": "hostilenetworks:block/loot_fabricator"
+    },
+    "facing=east,open=false": {
+      "model": "hostilenetworks:block/loot_fabricator",
+      "y": 90
+    },
+    "facing=east,open=true": {
+      "model": "hostilenetworks:block/loot_fabricator",
+      "y": 90
+    },
+    "facing=south,open=false": {
+      "model": "hostilenetworks:block/loot_fabricator",
+      "y": 180
+    },
+    "facing=south,open=true": {
+      "model": "hostilenetworks:block/loot_fabricator",
+      "y": 180
+    },
+    "facing=west,open=false": {
+      "model": "hostilenetworks:block/loot_fabricator",
+      "y": 270
+    },
+    "facing=west,open=true": {
+      "model": "hostilenetworks:block/loot_fabricator",
+      "y": 270
+    },
+    "facing=up,open=false": {
+      "model": "hostilenetworks:block/loot_fabricator"
+    },
+    "facing=up,open=true": {
+      "model": "hostilenetworks:block/loot_fabricator"
+    },
+    "facing=down,open=false": {
+      "model": "hostilenetworks:block/loot_fabricator"
+    },
+    "facing=down,open=true": {
+      "model": "hostilenetworks:block/loot_fabricator"
+    }
+  }
+}

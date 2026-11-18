@@ -1,0 +1,13 @@
+{
+  "title": "itemGroup.hostilenetworks",
+  "icon": "hostilenetworks:sim_chamber",
+  "items": [
+    "hostilenetworks:sim_chamber",
+    "hostilenetworks:loot_fabricator",
+    "hostilenetworks:blank_data_model",
+    "hostilenetworks:data_model",
+    "hostilenetworks:prediction_matrix",
+    "hostilenetworks:overworld_prediction",
+    "hostilenetworks:prediction"
+  ]
+}

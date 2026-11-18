@@ -1,0 +1,21 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "group": "hostilenetworks",
+  "key": {
+    "C": "minecraft:comparator",
+    "E": "minecraft:ender_pearl",
+    "G": "minecraft:glass_pane",
+    "M": "minecraft:lapis_lazuli",
+    "O": "minecraft:obsidian"
+  },
+  "pattern": [
+    " G ",
+    "EOE",
+    "MCM"
+  ],
+  "result": {
+    "id": "hostilenetworks:sim_chamber",
+    "count": 1
+  }
+}

@@ -1,0 +1,21 @@
+[package]
+# Port of Hostile Neural Networks 1.21.1-6.5.1 (Shadows-of-Fire/Hostile-Neural-Networks, MIT) to
+# Horizon 26.3 at the pin in horizon-mod.toml. Clean-room Rust rewrite from the mod's behaviour
+# (FINDINGS.md); local-only until publishing is approved, publishable under MIT with this source.
+#
+# Cargo's name and version are not the mod's identity: horizon-mod.toml is.
+name = "hostilenetworks"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+description = "Hostile Neural Networks for Horizon, slice 1: data models, simulation and loot"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# The pinned SDK's API crate, fetched into .horizon/sdk/ by any `cargo horizon-mod` command (the
+# launcher builds against its own copy of the same build). Any other registry dependency must be
+# pinned with `horizon-launcher native-lock .` before building.
+horizon-mod-api = { path = ".horizon/sdk/api/crates/horizon-mod-api" }
