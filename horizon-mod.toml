@@ -1,7 +1,7 @@
 id = "hostilenetworks"
 name = "Hostile Neural Networks"
-version = "0.2.0"
-description = """The Simulation Chamber → Prediction → Loot Fabricator loop of Hostile Neural Networks: a Data Model trains through simulated combat into Predictions, and the Loot Fabricator materializes a Prediction into the model's real drops. Slice 1 carries the zombie model, both machines with their slots, FE buffers, menus and screens, and the /hostilenetworks harness commands. Not yet ported: kill-driven model data, attunement, the 68 other models, the Deep Learner, the Data Center and the training-mode data upgrades."""
+version = "0.2.3"
+description = """The Simulation Chamber → Prediction → Loot Fabricator loop of Hostile Neural Networks: a Data Model trains through simulated combat into Predictions, and the Loot Fabricator materializes a Prediction into the model's real drops. Slice 1 carried the zombie model, both machines with their slots, FE buffers, menus and screens, and the /hostilenetworks harness commands; training mode is real (one data per 300-tick run, no loot, refused at the self-aware tier). Not yet ported: kill-driven model data (needs the Deep Learner), blank-model attunement, the 68 other models, the Deep Learner, the Data Center and the redstone modes."""
 authors = ["Shadows-of-Fire", "AdLf0208"]
 # A native mod: Rust in src/, compiled by the launcher against the game build [native] pins,
 # beside the carried assets/ and data/. The id is the resource namespace and the only identity:
@@ -17,5 +17,5 @@ capabilities = ["registries"]
 
 [native]
 game = "26.3"
-horizon = "0b14f8acfd97fa2c750e42795249dcc981178ca4"
+horizon = "0a875da91dbb0fdcb7ba8c42c11341aa229af51a"
 mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"

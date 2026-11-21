@@ -10,14 +10,49 @@
 // rewrite; the values are its data files (`model_tiers/*.json`) and its
 // `SimChamberTileEntity`/`LootFabTileEntity`.
 
-/// What a simulation run produces or consumes (`Item` as the port needs it).
+/// How far from a machine a player without operator rights may still read its contents: the
+/// vanilla block-interaction reach (4.5 blocks) plus a block of slack, from the player's position
+/// to the block's centre. `/hostilenetworks info` prints slot item ids and counts, so a remote
+/// read has to be an operator's.
+pub const READ_REACH: f64 = 6.0;
+
+/// Whether a command source may read the machine at `pos`.
+///
+/// `operator` is the source's permission level reaching 2; a player below it may read only a
+/// machine within [`READ_REACH`], and a non-player source without it reads nothing.
+#[must_use]
+pub fn may_read(operator: bool, player: Option<[f64; 3]>, pos: [i32; 3]) -> bool {
+    if operator {
+        return true;
+    }
+    player.is_some_and(|player| {
+        let centre = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]) + 0.5,
+            f64::from(pos[2]) + 0.5,
+        ];
+        let distance_squared: f64 = (0..3)
+            .map(|axis| (player[axis] - centre[axis]).powi(2))
+            .sum();
+        distance_squared <= READ_REACH * READ_REACH
+    })
+}
+
+/// Whether a slot command may run on a machine with `slots` slots: a recipient has to exist
+/// before a stack is cleared, and the slot has to be one of the machine's own.
+#[must_use]
+pub fn take_allowed(recipient: bool, slot: i32, slots: usize) -> bool {
+    recipient && usize::try_from(slot).is_ok_and(|slot| slot < slots)
+}
+
+/// What a simulation run produces or consumes (`ItemCount` as the port needs it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Item {
+pub struct ItemCount {
     pub id: &'static str,
     pub count: u32,
 }
 
-impl Item {
+impl ItemCount {
     /// The stack this item makes.
     #[must_use]
     pub const fn new(id: &'static str, count: u32) -> Self {
@@ -85,6 +120,13 @@ impl Tier {
             Tier::Superior => "superior",
             Tier::SelfAware => "self_aware",
         }
+    }
+
+    /// `ModelTier.isMax`: the top tier has no next one, and a model that reaches it can no
+    /// longer be trained (`SimChamberTileEntity.canUpgrade`).
+    #[must_use]
+    pub const fn is_max(self) -> bool {
+        matches!(self, Tier::SelfAware)
     }
 
     /// The next tier, or this one at the top (`ModelTierRegistry::next`).
@@ -204,6 +246,9 @@ pub enum FailState {
     Faulty,
     EnergyMidCycle,
     Redstone,
+    /// Training mode was asked for a model whose tier is already the top one
+    /// (`FailureState.CANNOT_TRAIN`).
+    CannotTrain,
 }
 
 impl FailState {
@@ -219,6 +264,7 @@ impl FailState {
             FailState::Faulty => "faulty",
             FailState::EnergyMidCycle => "energy_mid_cycle",
             FailState::Redstone => "redstone",
+            FailState::CannotTrain => "cannot_train",
         }
     }
 }
@@ -237,7 +283,7 @@ pub struct Model {
     /// The item one simulation consumes.
     pub input: &'static str,
     /// The model's base drop: one per completed run.
-    pub base_drop: Item,
+    pub base_drop: ItemCount,
     /// The Loot Fabricator's table, in the order its screen lists it.
     pub fab_drops: &'static [(&'static str, u32)],
 }
@@ -249,7 +295,7 @@ pub const ZOMBIE: Model = Model {
     name: "Zombie",
     sim_cost: 128,
     input: "hostilenetworks:prediction_matrix",
-    base_drop: Item::new("hostilenetworks:overworld_prediction", 1),
+    base_drop: ItemCount::new("hostilenetworks:overworld_prediction", 1),
     fab_drops: &[
         ("minecraft:rotten_flesh", 64),
         ("minecraft:iron_ingot", 8),
@@ -270,10 +316,10 @@ pub fn model(id: &str) -> Option<&'static Model> {
 /// The stack a model's Loot Fabricator selection makes, when the index is in
 /// its table.
 #[must_use]
-pub fn fab_drop(model: &Model, index: i32) -> Option<Item> {
+pub fn fab_drop(model: &Model, index: i32) -> Option<ItemCount> {
     let index = usize::try_from(index).ok()?;
     let (id, count) = model.fab_drops.get(index)?;
-    Some(Item::new(id, *count))
+    Some(ItemCount::new(id, *count))
 }
 
 /// The chamber as one tick sees it: its saved state and what its slots hold.
@@ -303,10 +349,15 @@ pub struct ChamberView {
 pub enum ChamberAction {
     /// No model in the slot: clear progress, show `model`.
     Idle(FailState),
-    /// A run finished: add the base drop and the predictions, reset progress.
+    /// A run finished: an inference run adds the base drop and the predictions, a training run
+    /// upgrades the model's data instead (`SimChamberTileEntity.serverTick`). Both count one
+    /// iteration.
     Finish {
-        base_drop: Item,
+        /// The loot an inference run adds; `None` in training mode, which produces none.
+        base_drop: Option<ItemCount>,
         predictions: u32,
+        /// The data the model gains from this run: one in training mode, none in inference.
+        data_gained: u32,
         /// The model gains one iteration per finished run.
         iterations: u32,
     },
@@ -333,6 +384,10 @@ pub fn chamber_action(view: &ChamberView) -> ChamberAction {
             FailState::Input
         } else if !view.powered {
             FailState::Redstone
+        } else if matches!(view.mode, Mode::Training) && tier.is_max() {
+            // `canUpgrade`: the top tier has no next one, so training is refused before the
+            // output and energy gates (`SimChamberTileEntity.canStartSimulation`).
+            FailState::CannotTrain
         } else if !view.output_room {
             FailState::Output
         } else if view.energy < cost {
@@ -353,10 +408,21 @@ pub fn chamber_action(view: &ChamberView) -> ChamberAction {
     }
     if view.runtime == 1 {
         // The last tick of a run does not drain energy, as upstream's
-        // `--runtime == 0` branch returns before `setEnergy`.
+        // `--runtime == 0` branch returns before `setEnergy`. Inference mode produces the loot;
+        // training mode upgrades the model by one instead, and a run never does both.
+        let (base_drop, predictions, data_gained) = if matches!(view.mode, Mode::Training) {
+            (None, 0, 1)
+        } else {
+            (
+                Some(model.base_drop),
+                view.prediction_success.max(0) as u32,
+                0,
+            )
+        };
         return ChamberAction::Finish {
-            base_drop: model.base_drop,
-            predictions: view.prediction_success.max(0) as u32,
+            base_drop,
+            predictions,
+            data_gained,
             iterations: 1,
         };
     }
@@ -394,7 +460,7 @@ pub enum FabAction {
     /// One tick of fabrication: progress and drain.
     Step { energy_cost: i32 },
     /// An item is done: add it to the outputs, consume one prediction.
-    Produce { drop: Item },
+    Produce { drop: ItemCount },
 }
 
 /// `LootFabTileEntity.serverTick`, as a decision.
@@ -618,6 +684,49 @@ mod tests {
     }
 
     #[test]
+    fn training_upgrades_the_model_and_produces_no_loot() {
+        let mut view = chamber(Some(&ZOMBIE), 20);
+        view.mode = Mode::Training;
+        view.runtime = 1;
+        view.prediction_success = 3;
+        assert_eq!(
+            chamber_action(&view),
+            ChamberAction::Finish {
+                base_drop: None,
+                predictions: 0,
+                data_gained: 1,
+                iterations: 1,
+            },
+            "a finished training run upgrades the model by one and produces no loot"
+        );
+    }
+
+    #[test]
+    fn a_self_aware_model_cannot_start_a_training_run() {
+        let mut view = chamber(Some(&ZOMBIE), 1254);
+        view.mode = Mode::Training;
+        assert_eq!(
+            chamber_action(&view),
+            ChamberAction::Idle(FailState::CannotTrain),
+            "the top tier cannot be upgraded, so training must refuse to start"
+        );
+        // Inference still runs on the same model: only training is refused.
+        view.mode = Mode::Inference;
+        assert!(matches!(
+            chamber_action(&view),
+            ChamberAction::Start { runtime: 240, .. }
+        ));
+    }
+
+    #[test]
+    fn training_needs_its_input_before_the_tier_gate() {
+        let mut view = chamber(Some(&ZOMBIE), 1254);
+        view.mode = Mode::Training;
+        view.has_input = false;
+        assert_eq!(chamber_action(&view), ChamberAction::Idle(FailState::Input));
+    }
+
+    #[test]
     fn a_mid_cycle_tick_drains_and_the_last_tick_finishes() {
         let mut view = chamber(Some(&ZOMBIE), 20);
         view.runtime = 10;
@@ -630,8 +739,9 @@ mod tests {
         assert_eq!(
             chamber_action(&view),
             ChamberAction::Finish {
-                base_drop: Item::new("hostilenetworks:overworld_prediction", 1),
+                base_drop: Some(ItemCount::new("hostilenetworks:overworld_prediction", 1)),
                 predictions: 2,
+                data_gained: 0,
                 iterations: 1
             }
         );
@@ -698,7 +808,7 @@ mod tests {
         assert_eq!(
             fab_action(&view),
             FabAction::Produce {
-                drop: Item::new("minecraft:rotten_flesh", 64)
+                drop: ItemCount::new("minecraft:rotten_flesh", 64)
             }
         );
     }
@@ -725,7 +835,7 @@ mod tests {
         assert_eq!(
             fab_action(&view),
             FabAction::Produce {
-                drop: Item::new("minecraft:iron_ingot", 8)
+                drop: ItemCount::new("minecraft:iron_ingot", 8)
             }
         );
     }
@@ -739,10 +849,36 @@ mod tests {
         assert_eq!(zombie.fab_drops.len(), 4);
         assert_eq!(
             fab_drop(zombie, 0),
-            Some(Item::new("minecraft:rotten_flesh", 64))
+            Some(ItemCount::new("minecraft:rotten_flesh", 64))
         );
-        assert_eq!(fab_drop(zombie, 3), Some(Item::new("minecraft:potato", 16)));
+        assert_eq!(
+            fab_drop(zombie, 3),
+            Some(ItemCount::new("minecraft:potato", 16))
+        );
         assert_eq!(fab_drop(zombie, 4), None);
         assert!(model("hostilenetworks:nope").is_none());
+    }
+
+    #[test]
+    fn only_an_operator_or_a_nearby_player_reads_a_machine() {
+        let pos = [10, 64, 10];
+        assert!(may_read(true, Some([500.0, 64.0, 500.0]), pos));
+        assert!(may_read(false, Some([13.0, 64.5, 10.5]), pos));
+        assert!(!may_read(false, Some([10.5, 64.5, 17.0]), pos));
+        assert!(!may_read(false, None, pos));
+        assert!(may_read(false, Some([10.5 + READ_REACH, 64.5, 10.5]), pos));
+    }
+
+    #[test]
+    fn a_slot_command_needs_a_recipient_and_an_own_slot() {
+        // The take command clears a slot, so it must never run without a recipient: a console or
+        // a command block would destroy the stack.
+        assert!(!take_allowed(false, 0, 4), "no recipient, no withdrawal");
+        assert!(take_allowed(true, 0, 4));
+        assert!(take_allowed(true, 3, 4));
+        // The slot must be one of this machine's own: a foreign container's slot is not ours.
+        assert!(!take_allowed(true, 4, 4));
+        assert!(!take_allowed(true, -1, 4));
+        assert!(!take_allowed(true, 0, 0));
     }
 }

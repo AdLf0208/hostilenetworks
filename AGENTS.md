@@ -14,10 +14,10 @@ not come back; its tree is kept as evidence in
 
 ## Rules
 
-- **`src/runtime.rs` never changes.** Every gameplay rule lives there and is
-  tested there; the glue calls it. Prove it with
-  `cmp src/runtime.rs ../_shared/evidence/hostilenetworks/retired-hnmod-0.1.0/mixins/hostilenetworks/runtime.rs`
-  after any `cargo fmt`.
+- **`src/runtime.rs` holds every gameplay rule and its tests.** A slice may extend it (test first,
+  then the rule: `Tier::is_max`/`CannotTrain` in 0.2.3), but a rule never moves into the glue. The
+  byte-identity `cmp` against the retired `.hnmod` bundle is **historical**: it held for 0.2.0 and
+  ended with the 0.2.1 review fixes.
 - The glue is one Part per machine (block entity, tick, screen, draw, click,
   menu button) plus declarations (container, energy, block entity type). Do not
   reintroduce per-hook files.

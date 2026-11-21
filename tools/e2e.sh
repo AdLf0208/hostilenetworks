@@ -3,16 +3,10 @@
 # trains a Data Model into a Prediction, and the Loot Fabricator turns that
 # Prediction into the model's loot.
 #
-# STATUS at SDK `0b14f8a` (2026-11-18): this scenario is the one the retired `.hnmod` bundle ran to
-# `PASS` (logs `../_shared/evidence/hostilenetworks/e2e.log`, `e2e-control.log`,
-# `e2e-negative.log`). It now needs a game the **launcher** built with this package, because a native
-# `.hmod` carries its own content and code and nothing is staged into a source build:
-#
-#   horizon-launcher native-build ports/hostilenetworks --instance <instance> --trust-native-code
-#
-# and a `horizon-ctl` that speaks the same build's protocol (`CTL=`). Neither is installed in this
-# environment, so no 0.2.0 in-game run is claimed; `notes.md` records it as a gap. The scenario and
-# its assertions are format-independent and were not weakened by the migration.
+# STATUS at SDK `0a875da` (2026-11-21): this scenario runs against the launcher's Nightly at the
+# campaign pin (`launcher-game.sh build hostilenetworks`), and its legs are recorded in
+# `../_shared/evidence/hostilenetworks-e2e/`. The retired `.hnmod` bundle ran the same scenario to
+# `PASS` at `1d63e0a` (`../_shared/evidence/hostilenetworks/e2e.log`).
 #
 # The arena is a stone platform at y=100 near the player's spawn. Every mod command is typed with
 # `ctl chat "/cmd"` because `ctl command` runs the console path and bypasses the mod's command hook
@@ -28,9 +22,18 @@
 #  4. the prediction is carried to the Loot Fabricator, which does nothing until a palette row is
 #     clicked on its own screen (an `energy` control first, then the click);
 #  5. with a selection it produces that model's drop (rotten flesh x64 for row 1, iron ingot x8 for
-#     row 2) and consumes the prediction.
+#     row 2) and consumes the prediction;
+#  6. a training run (mode switched by the screen's own mode line) adds one data and no loot, and a
+#     self-aware model in training is refused with `cannot_train` (control 5);
+#  7. all three carried recipes craft in a crafting table and consume their ingredients
+#     (`tools/craft_check.py`, with comparator-alone and missing-clay controls);
+#  8. every carried item is given and read back, and an unknown id is refused;
+#  9. in survival, mining each machine with the carried pickaxe drops it (loot tables), with a
+#     vanilla stone -> cobblestone break as the differential.
 #
 # SELFTEST=1 flips the chamber assertion (it must FAIL), proving the check can fail.
+# NEGATIVE=1 flips the training-mode assertion (a training run must NOT upgrade the model), so the
+# new slice's assertion is fail-capable too.
 # COUNTERFACTUAL=1 runs the same setup on a plain barrel instead of the chamber (no readout, no run).
 # CONTROL_GAME=<a game built WITHOUT this package> adds the differential leg: the machine block is
 # unknown there and the command does not exist.
@@ -45,6 +48,7 @@ CONTROL_GAME=${CONTROL_GAME:-}
 RES=${RES:-${HORIZON_RES:-/home/adlf/Desktop/horizon/.local/horizon-client/26.3}}
 SOCK=${SOCK:-/tmp/opencode/hostilenetworks-e2e.sock}
 SELFTEST=${SELFTEST:-0}
+NEGATIVE=${NEGATIVE:-0}
 COUNTERFACTUAL=${COUNTERFACTUAL:-0}
 KEEP=${KEEP:-0}
 WORLD=HostileNeuralNetworksE2E
@@ -109,6 +113,11 @@ say "launch (offscreen, creative; the package's own content and code)"
     --game "$GAME" --world "$WORLD" --seed 20261105 --creative --offscreen --wait \
     --game-dir "$SCRATCH/game" --resources "$RES"
 ctl wait-ready 180
+# The slot commands are operator-level (machine contents are not public state); the harness player
+# is made an operator from the console, the way a server admin would. `info` stays level 0 and
+# still proves the ordinary-player path.
+ctl command "op @a" >/dev/null 2>&1 || true
+ctl wait 4 >/dev/null
 
 say "a platform at y=100 near spawn"
 PX=$(ctl state | jq -r '.player.position[0]' | cut -d. -f1)
@@ -161,7 +170,7 @@ has "$X" "$Y" "$Z" hostilenetworks:prediction 0
 say "put a zombie Data Model into slot 0 and type it"
 ctl container "$X" "$Y" "$Z" hostilenetworks:data_model 1 >/dev/null
 ctl wait 4
-chat "hostilenetworks model set $X $Y $Z 0 hostilenetworks:zombie 20"
+chat "hostilenetworks modelset $X $Y $Z 0 20 hostilenetworks:zombie"
 ctl wait 4
 ctl messages 4 | jq -r '.chat[]' | grep -m1 'Data Model' || true
 line=$(readout "$X" "$Y" "$Z")
@@ -187,7 +196,7 @@ if [ "$SELFTEST" = 1 ]; then
 fi
 
 say "a self-aware model (accuracy 1.0) so the run always yields a prediction"
-chat "hostilenetworks model set $X $Y $Z 0 hostilenetworks:zombie 1254"
+chat "hostilenetworks modelset $X $Y $Z 0 1254 hostilenetworks:zombie"
 ctl wait 4
 line=$(readout "$X" "$Y" "$Z")
 echo "readout: $line"
@@ -338,6 +347,139 @@ echo "readout: $fab_line"
 has "$((X+2))" "$Y" "$Z" minecraft:rotten_flesh 0
 has "$((X+2))" "$Y" "$Z" hostilenetworks:prediction_matrix 1
 
+say "training mode upgrades the model and produces no loot"
+# The counts are unambiguous only if the inference run's loot is out of the way: take the base
+# drop into the player. (Slot 3's prediction went to the fabricator above.)
+chat "hostilenetworks take $X $Y $Z 2"
+ctl wait 4
+has "$X" "$Y" "$Z" hostilenetworks:overworld_prediction 0
+chat "hostilenetworks modelset $X $Y $Z 0 20 hostilenetworks:zombie"
+ctl wait 4
+line=$(readout "$X" "$Y" "$Z")
+echo "before training: $line"
+[ "$(field "$line" data)" = "20" ] || fail "the model should be back at 20 data: $line"
+# Switch to training through the screen's own mode line, the path the menu button owns.
+ctl tp "$X.5" 101 "$((Z+3)).5" >/dev/null
+ctl look-at block "$X" "$Y" "$Z" south >/dev/null || true
+ctl interact "$X" "$Y" "$Z" south >/dev/null || fail "the chamber did not open a menu"
+ctl wait 6
+ui=$(ctl ui)
+rect=$(jq -c '[.widgets[] | select(.id == "slot-300") | .bounds][0]' <<<"$ui")
+ox=$(jq -r '.[0] - 26' <<<"$rect")
+oy=$(jq -r '.[1] - 20' <<<"$rect")
+mcx=$(python3 -c "print($ox + 12)")
+mcy=$(python3 -c "print($oy + 48)")
+ctl click-at "$mcx" "$mcy" >/dev/null || fail "the mode click failed"
+ctl wait 6
+ctl close >/dev/null 2>&1 || true
+ctl wait 4
+line=$(readout "$X" "$Y" "$Z")
+echo "mode after the click: $(field "$line" mode)"
+[ "$(field "$line" mode)" = "training" ] || fail "the mode click did not reach training: $line"
+# Read the energy BEFORE the input lands, so the arithmetic does not depend on when the tick saw it.
+energy_before=$(sed -n 's/.*Chamber: \([0-9]*\) FE.*/\1/p' <<<"$line")
+ctl container "$X" "$Y" "$Z" hostilenetworks:prediction_matrix 1 >/dev/null
+ctl wait 340
+line=$(readout "$X" "$Y" "$Z")
+echo "after training: $line"
+[ "$(field "$line" data)" = "21" ] || fail "training did not add one data: $line"
+[ "$(field "$line" runtime)" = "0" ] || fail "the training run did not finish: $line"
+[ "$(field "$line" fail)" = "input" ] || fail "a finished training run should wait for input: $line"
+has "$X" "$Y" "$Z" hostilenetworks:overworld_prediction 0
+has "$X" "$Y" "$Z" hostilenetworks:prediction 0
+has "$X" "$Y" "$Z" hostilenetworks:prediction_matrix 0
+energy_after=$(sed -n 's/.*Chamber: \([0-9]*\) FE.*/\1/p' <<<"$line")
+# 299 draining ticks of a 154 FE/t training run (the finishing tick takes none).
+[ "$energy_after" = "$(( energy_before - 299 * 154 ))" ] \
+    || fail "training spent the wrong energy: before $energy_before, after $energy_after"
+if [ "$NEGATIVE" = 1 ]; then
+    say "NEGATIVE=1: a finished training run must NOT have upgraded the model (it did)"
+    [ "$(field "$line" data)" = "20" ] \
+        || fail "NEGATIVE: training upgraded the model to $(field "$line" data), so the assertion is alive"
+fi
+
+say "control 5: a self-aware model cannot be trained"
+chat "hostilenetworks modelset $X $Y $Z 0 1254 hostilenetworks:zombie"
+ctl wait 4
+line=$(readout "$X" "$Y" "$Z")
+energy_before=$(sed -n 's/.*Chamber: \([0-9]*\) FE.*/\1/p' <<<"$line")
+ctl container "$X" "$Y" "$Z" hostilenetworks:prediction_matrix 1 >/dev/null
+ctl wait 40
+line=$(readout "$X" "$Y" "$Z")
+echo "self-aware model in training: $line"
+[ "$(field "$line" fail)" = "cannot_train" ] || fail "a self-aware model started a training run: $line"
+[ "$(field "$line" runtime)" = "0" ] || fail "a refused training run is in progress: $line"
+has "$X" "$Y" "$Z" hostilenetworks:prediction_matrix 1
+energy_after=$(sed -n 's/.*Chamber: \([0-9]*\) FE.*/\1/p' <<<"$line")
+[ "$energy_after" = "$energy_before" ] \
+    || fail "a refused training run spent energy: $energy_before -> $energy_after"
+
+say "every carried recipe crafts in a real crafting table"
+CTX=$((X-3))
+CTZ=$Z
+command_ "setblock $CTX 101 $CTZ minecraft:crafting_table"
+ctl tp "$((CTX)).5" 101 "$((CTZ+2)).5" >/dev/null
+ctl wait 10
+python3 "$PORT/tools/craft_check.py" "$SOCK" "$CTL" "$CTX" 101 "$CTZ" \
+    || fail "a carried recipe did not craft (see craft_check.py's line)"
+command_ "setblock $CTX 101 $CTZ minecraft:air"
+
+say "every carried item exists and is readable; an unknown id is refused"
+for item in hostilenetworks:sim_chamber hostilenetworks:loot_fabricator \
+            hostilenetworks:data_model hostilenetworks:blank_data_model \
+            hostilenetworks:prediction hostilenetworks:overworld_prediction \
+            hostilenetworks:prediction_matrix; do
+    ctl give "$item" 1 >/dev/null
+    ctl wait 4
+    got=$(ctl inventory | jq -r --arg i "$item" '.counts[$i] // 0')
+    [ "$got" -ge 1 ] || fail "give $item did not reach the inventory: $(ctl inventory | jq -c '.counts')"
+    echo "  $item x1: ok"
+done
+ctl give hostilenetworks:not_a_real_item 1 >/dev/null 2>&1 || true
+ctl wait 4
+got=$(ctl inventory | jq -r '.counts["hostilenetworks:not_a_real_item"] // 0')
+[ "$got" = 0 ] || fail "an unknown item id was accepted into the inventory"
+echo "  hostilenetworks:not_a_real_item: refused"
+
+say "the carried loot tables drop the machine when it is mined (survival)"
+LX=$((X-5))
+LZ=$Z
+command_ "gamemode survival @s"
+ctl wait 4
+command_ "clear @s"
+ctl give minecraft:diamond_pickaxe 1 >/dev/null
+ctl wait 4
+ctl select minecraft:diamond_pickaxe >/dev/null || fail "the pickaxe is not in the hotbar"
+command_ "setblock $LX 101 $LZ hostilenetworks:sim_chamber"
+command_ "setblock $((LX+1)) 101 $LZ hostilenetworks:loot_fabricator"
+ctl tp "$((LX)).5" 101 "$((LZ+2)).5" >/dev/null
+ctl wait 10
+for block in "hostilenetworks:sim_chamber $LX" "hostilenetworks:loot_fabricator $((LX+1))"; do
+    set -- $block
+    id=$1
+    bx=$2
+    before=$(ctl inventory | jq -r --arg i "$id" '.counts[$i] // 0')
+    ctl break "$bx" 101 "$LZ" --timeout 30 >/dev/null || fail "a $id did not break"
+    ctl wait 10
+    ctl tp "$((bx)).5" 101 "$LZ" >/dev/null
+    ctl wait 20
+    after=$(ctl inventory | jq -r --arg i "$id" '.counts[$i] // 0')
+    [ "$after" = "$((before + 1))" ] \
+        || fail "$id's loot table dropped nothing: $before -> $after"
+    echo "  $id: $before -> $after"
+done
+# The differential for the same break path on vanilla data: a stone block drops cobblestone.
+command_ "setblock $LX 101 $LZ minecraft:stone"
+before=$(ctl inventory | jq -r '.counts["minecraft:cobblestone"] // 0')
+ctl break "$LX" 101 "$LZ" --timeout 30 >/dev/null || fail "the stone block did not break"
+ctl wait 10
+ctl tp "$((LX)).5" 101 "$LZ" >/dev/null
+ctl wait 20
+after=$(ctl inventory | jq -r '.counts["minecraft:cobblestone"] // 0')
+[ "$after" = "$((before + 1))" ] \
+    || fail "the vanilla stone differential dropped nothing: $before -> $after"
+echo "  minecraft:stone -> cobblestone: $before -> $after"
+
 if [ -n "$CONTROL_GAME" ]; then
     # The differential: the same world in a game built WITHOUT this package. The machine id and
     # the command are unknown there, so everything above is the package's own behaviour.
@@ -360,4 +502,4 @@ if [ -n "$CONTROL_GAME" ]; then
     ctl quit >/dev/null 2>&1 || true
 fi
 
-echo "PASS: the chamber ran a zombie simulation with FE (no model / no energy controls held), produced a base drop and a typed prediction, and the fabricator turned that prediction into iron ingot x8 through its own palette click (no-selection and wrong-item controls held); a plain barrel is not a machine"
+echo "PASS: the chamber ran a zombie simulation with FE (no model / no energy controls held), produced a base drop and a typed prediction, the fabricator turned that prediction into iron ingot x8 through its own palette click, a training run upgraded the model to 21 data with no loot and a self-aware model was refused (cannot_train), all three carried recipes crafted and consumed their ingredients, every carried item was given and read back with an unknown id refused, and both loot tables dropped their machine to a survival pickaxe (no-selection, wrong-item, no-energy and comparator-alone controls held); a plain barrel is not a machine"

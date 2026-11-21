@@ -23,10 +23,10 @@ use mod_api::{
 };
 
 use crate::runtime::{
-    ChamberAction, ChamberView, DATA_COMPONENT, DATA_MODEL_COMPONENT, DATA_MODEL_ITEM,
-    FAB_POWER_CAP, FAB_RUNTIME, FabAction, FabView, FailState, ITERATIONS_COMPONENT, Item, MODELS,
-    Mode, PREDICTION_ITEM, SIM_POWER_CAP, chamber_action, data_cap_for, fab_action, fab_drop,
-    is_chamber, is_fabricator, model, tier_for,
+    self, ChamberAction, ChamberView, DATA_COMPONENT, DATA_MODEL_COMPONENT, DATA_MODEL_ITEM,
+    FAB_POWER_CAP, FAB_RUNTIME, FabAction, FabView, FailState, ITERATIONS_COMPONENT, ItemCount,
+    MODELS, Mode, PREDICTION_ITEM, SIM_POWER_CAP, chamber_action, data_cap_for, fab_action,
+    fab_drop, is_chamber, is_fabricator, model, tier_for,
 };
 
 /// The two machines' block ids.
@@ -123,6 +123,7 @@ pub(crate) fn fail_of(value: i32) -> FailState {
         5 => FailState::Faulty,
         6 => FailState::EnergyMidCycle,
         7 => FailState::Redstone,
+        8 => FailState::CannotTrain,
         _ => FailState::None,
     }
 }
@@ -137,6 +138,7 @@ pub(crate) fn fail_index(fail: FailState) -> i32 {
         FailState::Faulty => 5,
         FailState::EnergyMidCycle => 6,
         FailState::Redstone => 7,
+        FailState::CannotTrain => 8,
     }
 }
 
@@ -231,7 +233,12 @@ fn prediction_slot_takes(host: &dyn Host, slot: Option<&ItemStack>, model_id: &s
 }
 
 /// Adds `item` (and, for a prediction, its model component) to a slot `slot_takes` accepted.
-fn add_to_slot(host: &dyn Host, slot: &mut Option<ItemStack>, item: Item, model_id: Option<&str>) {
+fn add_to_slot(
+    host: &dyn Host,
+    slot: &mut Option<ItemStack>,
+    item: ItemCount,
+    model_id: Option<&str>,
+) {
     match slot {
         Some(stack) => {
             let count = stack.count() + item.count;
@@ -516,26 +523,39 @@ fn chamber_tick(host: &mut dyn ServerHost, event: &mut BlockEntityTickEvent<'_>)
         ChamberAction::Finish {
             base_drop,
             predictions,
+            data_gained,
             iterations,
         } => {
-            add_to_slot(&*host, &mut event.entity.items[2], base_drop, None);
+            if let Some(base_drop) = base_drop {
+                add_to_slot(&*host, &mut event.entity.items[2], base_drop, None);
+            }
             if predictions > 0
                 && let Some(found) = found
             {
                 add_to_slot(
                     &*host,
                     &mut event.entity.items[3],
-                    Item::new(PREDICTION_ITEM, predictions),
+                    ItemCount::new(PREDICTION_ITEM, predictions),
                     Some(found.id),
                 );
             }
-            set_int(&mut saved, KEY_RUNTIME, 0);
-            if let Some(stack) = event.entity.items[0].as_ref() {
+            // The finishing tick rewrites the model stack: training adds its data first, then the
+            // iteration count goes on the same stack, as upstream's `setData` then `setIters`.
+            // Inference never touches the data component (`setData` is only called in training),
+            // so an absent component must stay absent.
+            if let Some(stack) = event.entity.items[0].as_mut() {
+                if data_gained > 0 {
+                    let data = stack_data(&*host, stack) + data_gained as i32;
+                    if let Some(typed) = with_stack_data(stack, data) {
+                        *stack = typed;
+                    }
+                }
                 let count = stack_iterations(&*host, stack) + iterations as i32;
                 if let Some(typed) = with_stack_iterations(stack, count) {
-                    event.entity.items[0] = Some(typed);
+                    *stack = typed;
                 }
             }
+            set_int(&mut saved, KEY_RUNTIME, 0);
             host.block_entity_sync(pos);
         }
     }
@@ -999,13 +1019,32 @@ fn info_line(host: &mut dyn ServerHost, level: LevelRef, pos: [i32; 3]) -> Optio
     }
 }
 
+/// The slots a machine kind owns, or 0 when the block is not one of ours.
+fn slots_of(machine: Machine) -> usize {
+    match machine {
+        Machine::Chamber => CHAMBER_SLOTS,
+        Machine::Fabricator => FAB_SLOTS,
+    }
+}
+
 /// A machine's slot as a stack, if it holds one.
+///
+/// Both slot helpers first prove the block is one of this mod's machines and that the slot is
+/// the machine's own: without that check they would read or clear the slot of any block entity
+/// standing at the coordinates — a foreign container's contents included.
 fn machine_slot(
     host: &dyn ServerHost,
     level: LevelRef,
     pos: [i32; 3],
     slot: u32,
 ) -> Option<ItemStack> {
+    let machine = machine_at(host, level, pos)?;
+    if usize::try_from(slot)
+        .ok()
+        .is_none_or(|slot| slot >= slots_of(machine))
+    {
+        return None;
+    }
     host.block_entity(level, pos)?
         .item_slot(host, slot)
         .ok()
@@ -1020,6 +1059,15 @@ fn write_machine_slot(
     slot: u32,
     stack: Option<ItemStack>,
 ) -> bool {
+    let Some(machine) = machine_at(&*host, level, pos) else {
+        return false;
+    };
+    if usize::try_from(slot)
+        .ok()
+        .is_none_or(|slot| slot >= slots_of(machine))
+    {
+        return false;
+    }
     let Some(entity) = host.block_entity(level, pos) else {
         return false;
     };
@@ -1126,15 +1174,15 @@ pub(crate) fn declare_commands(event: &mut RegisterCommandsEvent<'_>) {
         2,
     ));
     event.commands.push(Command::op(
-        "hostilenetworks model give <model:word> <data:integer>",
+        "hostilenetworks modelgive <model:word> <data:integer>",
         2,
     ));
     event.commands.push(Command::op(
-        "hostilenetworks model held <model:word> <data:integer>",
+        "hostilenetworks modelheld <model:word> <data:integer>",
         2,
     ));
     event.commands.push(Command::op(
-        "hostilenetworks model set <pos:block_pos> <slot:integer> <model:word> <data:integer>",
+        "hostilenetworks modelset <pos:block_pos> <slot:integer> <data:integer> <model:text>",
         2,
     ));
     event.commands.push(Command::op(
@@ -1149,6 +1197,17 @@ pub(crate) fn declare_commands(event: &mut RegisterCommandsEvent<'_>) {
         "hostilenetworks put <pos:block_pos> <slot:integer>",
         2,
     ));
+}
+
+/// The source's right to read machine contents: its permission reaching the operator level (2,
+/// the level every other slot command requires) and the player's position when it is a player.
+fn reader(host: &dyn ServerHost, source: &CommandSource) -> (bool, Option<[f64; 3]>) {
+    let operator = source.permission().level() >= 2;
+    let player = match source {
+        CommandSource::Player { player, .. } => player.entity().position(host),
+        _ => None,
+    };
+    (operator, player)
 }
 
 fn block_pos(argument: Option<&CommandArgumentValue>) -> Option<[i32; 3]> {
@@ -1190,6 +1249,14 @@ pub(crate) fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEv
                 say(host, "Usage: /hostilenetworks info <x> <y> <z>".to_owned());
                 return Flow::Cancel;
             };
+            // The readout names the machines' slot items and counts: machine contents, not public
+            // state. An operator reads any machine; a player only one within reach; any other
+            // non-operator source nothing.
+            let (operator, reader) = reader(&*host, event.source);
+            if !runtime::may_read(operator, reader, pos) {
+                say(host, "That machine is out of reach.".to_owned());
+                return Flow::Cancel;
+            }
             info_line(host, level, pos).unwrap_or_else(|| "No machine at that position.".to_owned())
         }
         ["hostilenetworks", "energy"] => {
@@ -1208,7 +1275,7 @@ pub(crate) fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEv
                 None => "No machine at that position.".to_owned(),
             }
         }
-        ["hostilenetworks", "model", "give"] => {
+        ["hostilenetworks", "modelgive"] => {
             let (found, data) = (
                 word(invocation.argument("model")),
                 integer(invocation.argument("data")),
@@ -1242,7 +1309,7 @@ pub(crate) fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEv
                 Some(_) => "No room for the Data Model.".to_owned(),
             }
         }
-        ["hostilenetworks", "model", "held"] => {
+        ["hostilenetworks", "modelheld"] => {
             let (found, data) = (
                 word(invocation.argument("model")),
                 integer(invocation.argument("data")),
@@ -1277,7 +1344,7 @@ pub(crate) fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEv
             let _ = player.set_inventory_slot(host, slot, Some(typed));
             format!("Held Data Model set to {} with {data} data", found.name)
         }
-        ["hostilenetworks", "model", "set"] => {
+        ["hostilenetworks", "modelset"] => {
             let slot = integer(invocation.argument("slot"));
             let (found, data) = (
                 word(invocation.argument("model")),
@@ -1292,8 +1359,7 @@ pub(crate) fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEv
             else {
                 say(
                     host,
-                    "Usage: /hostilenetworks model set <x> <y> <z> <slot> <model> <data>"
-                        .to_owned(),
+                    "Usage: /hostilenetworks modelset <x> <y> <z> <slot> <data> <model>".to_owned(),
                 );
                 return Flow::Cancel;
             };
@@ -1343,13 +1409,24 @@ pub(crate) fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEv
                 CommandSource::Player { player, .. } => Some(*player),
                 _ => None,
             };
+            // Nothing is cleared before a recipient exists: a console or a command block would
+            // otherwise destroy the stack, and the slot has to be the machine's own.
+            let slots = machine_at(&*host, level, pos).map_or(0, slots_of);
+            if !runtime::take_allowed(player.is_some(), slot, slots) {
+                say(host, "That slot cannot be taken.".to_owned());
+                return Flow::Cancel;
+            }
+            let Some(player) = player else {
+                say(host, "That slot cannot be taken.".to_owned());
+                return Flow::Cancel;
+            };
             let Ok(slot) = u32::try_from(slot) else {
                 say(host, "That slot is empty.".to_owned());
                 return Flow::Cancel;
             };
             let taken = machine_slot(&*host, level, pos, slot)
                 .filter(|_| write_machine_slot(host, level, pos, slot, None));
-            let (Some(stack), Some(player)) = (taken, player) else {
+            let Some(stack) = taken else {
                 say(host, "That slot is empty.".to_owned());
                 return Flow::Cancel;
             };
@@ -1552,6 +1629,7 @@ mod tests {
             FailState::Faulty,
             FailState::EnergyMidCycle,
             FailState::Redstone,
+            FailState::CannotTrain,
         ] {
             assert_eq!(fail_of(fail_index(fail)), fail, "{fail:?} must round-trip");
         }

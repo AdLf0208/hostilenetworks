@@ -1,68 +1,71 @@
-# Hostile Neural Networks — a Horizon port
+# Hostile Neural Networks for Horizon — slice 1
 
-**Hostile Neural Networks** is a Minecraft mod. A Minecraft Forge mod about defeating hostile simulations to produce loot drops. This repository is a **port of it to [Horizon](https://github.com/horizon-rust/horizon)**, the Rust engine for Minecraft Java 26.3. It carries the complete source of the port plus the content files it ships, and installs as a single `.hmod` package.
+The **Simulation Chamber → Prediction → Loot Fabricator** loop of Hostile Neural
+Networks 6.5.1 (MIT, `Shadows-of-Fire/Hostile-Neural-Networks`), rewritten in
+Rust for Horizon. Clean-room rewrite: the upstream Java was read for behaviour
+only.
 
-Upstream: [Shadows-of-Fire/Hostile-Neural-Networks](https://github.com/Shadows-of-Fire/Hostile-Neural-Networks) — licence **MIT**.
+One flat SDK package (mod API `0.2`): the carried blocks, items, models,
+textures, lang, menus, recipes and loot tables are the `assets/` and `data/`
+here, and the behaviour is the one `impl mod_api::Hooks` in `src/lib.rs`.
 
-| | |
-|---|---|
-| Upstream mod | Hostile Neural Networks ([source](https://github.com/Shadows-of-Fire/Hostile-Neural-Networks)) |
-| Ported to | Horizon 0b14f8a, Minecraft Java 26.3, mod API `0.2` |
-| Package | `hostilenetworks.hmod` (install it with the Horizon launcher) |
-| Licence | **MIT** — the upstream mod's licence; see [Licence and credit](#licence-and-credit) |
+- `src/runtime.rs` — the pure rules (model tiers, the chamber's run, the
+  fabricator's production), byte-identical to the retired `.hnmod` bundle's
+  `runtime.rs`, with its 16 tests.
+- `src/support.rs` — the glue: each machine's block entity, tick, screen, draw,
+  click and menu button as one **Part**, its slots/FE buffer/menu as
+  **declarations**, the item components, and the `/hostilenetworks` harness
+  commands. 10 tests pin the declarations, the saved-int codecs and the readout
+  lines.
+- `assets/`, `data/` — the carried content (2 blocks, 5 items, 3 item
+  components, 2 menus, 3 recipes, 2 loot tables, the pickaxe tag, the creative
+  tab, lang), moved unchanged from the retired bundle's `content/`.
 
-## What this port implements
+What this slice implements: a Data Model trains through simulated combat into
+Predictions (2,000,000 FE buffer, 240-tick inference runs), and the Loot
+Fabricator turns a Prediction into the model's real drops (60 ticks, 256 FE a
+tick, 16 outputs, a palette on its own screen). **Training mode** is the chamber's other half: a 300-tick run at 1.2× the energy adds one data to the
+model and produces no loot, and a self-aware model is refused (`cannot_train`).
+The zombie model's table is carried.
 
-- `hostilenetworks:sim_chamber` — 4 slots (model, input, base drop, prediction),
-- `hostilenetworks:loot_fabricator` — 17 slots (prediction + 16 outputs), a
-- `hostilenetworks:data_model` — the model (zombie) plus `data` and
-- `hostilenetworks:prediction` — carries the model it came from.
-- `hostilenetworks:prediction_matrix`, `hostilenetworks:blank_data_model`,
-- One model's table: `hostilenetworks:zombie` (sim cost 128, matrix input,
-- **The embedded-content workaround is gone.** 0.1.0 wrote its content `.hmod` to `.horizon-cache/`
-- **Block dispatch is by entity type in the tick.** Observable only as: a Part cannot be accidentally
+Not yet ported: kill-driven model data (upstream upgrades models inside a Deep
+Learner, so this needs that item first), blank-model attunement (blocked: the
+pin's entity-interaction events carry no player), the 68 other models, the Deep
+Learner, the Data Center and its Queue mode, the redstone modes and a faithful
+custom GUI background. See [`notes.md`](notes.md) for the full gap list, the
+deviations, the coverage table and the helper→hook map.
 
-## Not yet ported
+**Local-only** until the maintainer approves publishing (ARCHITECTURE.md §8);
+MIT allows derivatives, approval is still required.
 
-- Kill/break model upgrades (`data_gained`, the `living_death` hook, the
-- Blank-model attunement (`rightClickToAttune`) and the Model Framework's use.
-- The other 58 entity and 10 block models, their optional drops and the
-- Deep Learner (curio, menu, HUD) and Fabrication Directive.
-- Data Center multiblock + Queue mode + redstone modes.
-- Training mode's model-data upgrades.
-- The generalized predictions and the `living_matter` recipes.
-- The chamber/fabricator GUI textures and the model-rendering item.
+- Notes, deviations, gaps and the migration record: [`notes.md`](notes.md)
+- Upstream findings and the next slices: [`FINDINGS.md`](FINDINGS.md)
+- Jar provenance and every carry patch:
+  [`../_shared/carry-work/hostilenetworks/SOURCE.md`](../_shared/carry-work/hostilenetworks/SOURCE.md)
+- Evidence (ladder, package checks, the launcher in-game legs):
+  [`../_shared/evidence/hostilenetworks/`](../_shared/evidence/hostilenetworks/) and
+  [`../_shared/evidence/hostilenetworks-e2e/`](../_shared/evidence/hostilenetworks-e2e/)
 
-## Installing
+Pinned to SDK `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` / mixins
+`e59da9094f0c2fdda6c627fe9eff22dec6a906f0` for game 26.3. Compiles and packages
+through the campaign's build slot (the port's `.horizon/sdk` is fetched per clone,
+so the SDK ladder runs locally with `BUILD_LOCAL=1`):
 
-1. Install the [Horizon launcher](https://github.com/horizon-rust/horizon/releases) (0.2.70 or newer).
-2. Add `hostilenetworks.hmod` to the instance's mods.
-3. The package is pinned to a specific Horizon build; the launcher checks that pin.
-
-## Licence and credit
-
-Hostile Neural Networks was created by its upstream authors; the code, models and assets in the original mod
-remain theirs and are used here under **MIT**. The Rust in this repository is a clean-room
-rewrite for Horizon, not a translation of the original source.
-
-- `LICENSE` — the upstream licence text.
-- `LICENSE-NOTICE.md` — what this port carries and where it came from.
-- The upstream project: https://github.com/Shadows-of-Fire/Hostile-Neural-Networks
-
-## Technical details
-
+```sh
+ports/tools/build-slot.sh run --job hostilenetworks-sdk --port ports/hostilenetworks --step test -- \
+    bash -c 'cd ports/hostilenetworks && cargo test --offline'
+ports/tools/build-slot.sh run --job hostilenetworks-sdk --port ports/hostilenetworks --step build -- \
+    bash -c 'cd ports/hostilenetworks && rm -f Cargo.lock && cargo horizon-mod build'
 ```
-horizon-mod.toml   package manifest (id, version, api, [native] pin)
-Cargo.toml         the crate; depends on `horizon-mod-api` from the fetched SDK
-src/               lib.rs (the one `impl Hooks`), runtime.rs (pure logic + tests), glue
-assets/ data/      the content the package ships
-tools/             content generators and the e2e scenario
+
+The in-game check runs on the launcher's Nightly at the pin:
+
+```sh
+ports/tools/launcher-game.sh build hostilenetworks
+eval "$(ports/tools/launcher-game.sh env hostilenetworks)"
+ports/tools/build-slot.sh run --job e2e-hostilenetworks --port ports/hostilenetworks \
+    --step e2e -- bash ports/hostilenetworks/tools/e2e.sh
 ```
 
-- Build: `cargo horizon-mod build` (packages; it does not compile against the game).
-- Test: `cargo test`, `cargo clippy --all-targets -- -D warnings`.
-- In-game: `ports/tools/launcher-game.sh run hostilenetworks` in the campaign tree, or install the
-  `.hmod` and play; the harness scenario is `tools/e2e.sh`.
-
-This repository is generated from the campaign's port at `ports/hostilenetworks/`; the port's own
-`notes.md` is the full record (decisions, traps, evidence).
+The current legs are `PASS` + `EXIT:0`, control `EXIT:1`, `SELFTEST=1` `EXIT:1` and
+`NEGATIVE=1` `EXIT:1` in `../_shared/evidence/hostilenetworks-e2e/`.

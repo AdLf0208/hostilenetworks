@@ -8,9 +8,9 @@ SHA-1 (`5e5db7d3…31b4`); provenance and every carry patch are in
 Upstream findings, the tier table and the next slices are in
 [`FINDINGS.md`](FINDINGS.md).
 
-**Format (2026-11-18):** one flat SDK package, `hostilenetworks.hmod` 0.2.0
-(`api = "0.2"`), for SDK `0b14f8a` / mixins `e59da90`. The `.hnmod` container is
-retired; see [`## Migration to the SDK format`](#migration-to-the-sdk-format)
+**Format (2026-11-21):** one flat SDK package, `hostilenetworks.hmod` **0.2.3** (`api = "0.2"`), for
+SDK **`0a875da`** / mixins `e59da90` (re-pinned from `0b14f8a` by the campaign repin). The `.hnmod`
+container is retired; see [`## Migration to the SDK format`](#migration-to-the-sdk-format)
 for the file map, the helper→hook table, the measured ladder and the traps.
 Everything below the migration section that names `mixins/`, injections or
 `tools/horizon.py` describes the **retired 0.1.0 bundle**, kept as history and
@@ -48,6 +48,114 @@ Model:
 - One model's table: `hostilenetworks:zombie` (sim cost 128, matrix input,
   overworld prediction, four fabricator rows).
 
+## Slice 2 — training mode upgrades the model (0.2.3, 2026-11-21)
+
+**Gap 6** of the list below ("Training mode's model-data upgrades"): the mode switch already
+existed and reset the run, but a completed training run still produced the inference loot and never
+touched the model's data. 0.2.3 implements the other half of upstream's
+`SimChamberTileEntity.serverTick` (read for behaviour, `227bced`→`787bced` era source):
+
+- a finished **training** run adds **one** data to the model in slot 0 (`canUpgrade` →
+  `currentModel.setData(getData() + 1)`, i.e. +1 per run, not the kill `data_gained`), adds **no**
+  base drop and **no** prediction, and still counts one iteration;
+- training is **refused** for a self-aware model (`ModelTier.isMax`) before the output/energy
+  gates, with a new `FailureState.CANNOT_TRAIN` → `fail cannot_train`;
+- the start gate order is upstream's: input → redstone → cannot-train → output → energy.
+
+Unit tests (red first, `ports/_shared/evidence/hostilenetworks/sdk-test-red-training.log`):
+
+| test | before the fix |
+|---|---|
+| `training_upgrades_the_model_and_produces_no_loot` | `left: Finish { base_drop: Some(overworld_prediction), predictions: 3, data_gained: 0, … }` |
+| `a_self_aware_model_cannot_start_a_training_run` | `left: Start { runtime: 300, predictions: 1 } right: Idle(CannotTrain)` |
+| `training_needs_its_input_before_the_tier_gate` | guard for the gate order (passes before and after) |
+
+The runtime change also renamed the pure `Item` struct to **`ItemCount`**: `fits --build 0b14f8a`
+scanned it as the SDK's `Item` and false-failed (`the type Item can no longer be built with a
+literal`), the local-type collision recorded in HANDOVER §9d item 14. With the rename the same
+`fits` run answers `0b14f8a  fits` (exit 0) and the pin run still answers `0a875da  made for`.
+
+In game (`ports/_shared/evidence/hostilenetworks-e2e/e2e-launcher.log`): a basic zombie model at 20
+data, the mode switched by the screen's own mode line, one Prediction Matrix and 1,000,000 FE →
+after 300 ticks the readout is `… FE, runtime 0, predictions 0, mode training, fail input, tier
+basic, data 21, slots [data_model x1]`, the base-drop and prediction slots are empty, and the
+energy fell from 1,969,408 to 1,923,362 — exactly 299 × 154 FE (the finishing tick takes none).
+`control 5` then puts a self-aware model (1254 data) into the same training chamber with an input:
+`fail cannot_train`, `runtime 0`, the input is not consumed and the energy is unchanged. `NEGATIVE=1`
+flips the data assertion and exits 1 (`training upgraded the model to 21, so the assertion is alive`).
+
+### Coverage — the families the package ships
+
+| family | status | evidence / phase |
+|---|---|---|
+| block | tested | both machines placed and read back (phases 1–5); a survival pickaxe break drops them (phase 9) |
+| block_entity | tested | saved `energy`/`runtime`/`mode`/`fail`/`model` read back by `/hostilenetworks info`; the run and the fabrication are tick-driven |
+| item | tested | five items given and read back, an unknown id refused (phase 8); the inventory's sixth entry, `data_model_base`, is a **model file**, not an item (see below) |
+| loot_table | tested | survival pickaxe break: `sim_chamber 0→1`, `loot_fabricator 0→1`; the vanilla stone→cobblestone break is the differential |
+| recipe:minecraft:crafting_shaped | tested | `tools/craft_check.py`: each of the three outputs' id + count, the stack in the inventory, ingredients consumed, plus comparator-alone and missing-clay controls |
+| multiblock | not ported | the package ships none; the Data Center is gap 5 (7×7 shell, IO ports, 25-sim controller) |
+
+### Coverage — other families (documented, not in the artefact inventory)
+
+- **`item`'s sixth inventory entry, `hostilenetworks:data_model_base`**: **not an item** — a carried item
+  model (`assets/hostilenetworks/models/item/data_model_base.json`), the framework texture the model
+  item is drawn with; the `item` row above covers the five real items.
+- **Item components** (`data_model`, `data`, `iterations`): **tested** — the typed model, data 20 → 21
+  (training) and the iteration count survive chamber → player → fabricator.
+- **Menu / screen** (4 and 17 slots): **tested** — `ctl screen` slot counts, the mode-line click and
+  the fabricator palette click.
+- **Tag `minecraft:mineable/pickaxe`**: **tested** — the pickaxe break drops both machines (membership
+  itself is not readable through `ctl`).
+- **Command family** (`info`, `energy`, `modelset`, `take`, `put`, `fab`): **tested** — every readout is
+  parsed; an unknown machine position answers `No machine at that position.`
+- **Creative tab**: **not ported** — carried data; `ctl` has no creative-tab read.
+- **Lang / models / textures**: **tested (load only)** — the game loads them and all items render; the
+  e2e asserts ids and states, not pixels.
+- **Kill/break model data (gap 1)**: **not ported** — upstream upgrades models **inside a Deep Learner**
+  only (`HostileEvents.forEachLearner`), so it needs gap 4's item container first.
+- **Blank-model attunement (gap 2)**: **blocked(no-player-handle-on-entity-interact)** — the pin's
+  `entity_interact_specific` / `item_interact_mob` events carry no player (`surface.json` arguments:
+  entity, kind, stack, location), so the held stack cannot be rewritten.
+- **The other 68 models (gap 3)**: **not ported** — one table row per model plus block-model variants.
+- **Deep Learner + Fabrication Directive (gap 4)**: **not ported** — needs an item container, a menu
+  and a HUD.
+- **Queue mode, redstone modes (gap 5)**: **not ported** — a later slice.
+- **Generalized predictions + `living_matter` (gap 7)**: **not ported** — the four prediction items and
+  their conversion recipes.
+- **GUI textures, model-rendering item (gap 8)**: **not ported** — client renderer and art; no renderer
+  claim is made.
+
+### Slice 2 ladder and artifact (0.2.3, pin `0a875da`)
+
+| step | command | result |
+|---|---|---|
+| repin | `[native] horizon` → `0a875da…`, `.horizon/sdk` deleted so the tool refetches | `SDK 0a875da (build 0a875da91dbb0fdcb7ba8c42c11341aa229af51a) in ./.horizon/sdk` |
+| tests | `cargo test --offline` (in a `build-slot.sh` lease, `BUILD_LOCAL=1`) | **31 passed, 0 failed** (`sdk-test.log`) |
+| clippy | `cargo clippy --all-targets --offline -- -D warnings` | exit 0, 0 warnings (`sdk-clippy.log`) |
+| fmt | `cargo fmt --check` | `FMT_EXIT:0` (`sdk-fmt.log`) |
+| build 1 | `rm -f Cargo.lock && cargo horizon-mod build` | 64,607 B, sha256 `8843ad11…c432` |
+| build 2 | the same again | `CMP:identical`, no `Cargo.lock` packed |
+| check | `cargo horizon-mod check hostilenetworks.hmod` | `CHECK_EXIT:0`; `hostilenetworks 0.2.3 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)` (`sdk-check.log`) |
+| fits, pin | `cargo horizon-mod fits … --build 0a875da` | `0a875da  made for`, `FITS_EXIT:0` (`sdk-fits.log`) |
+| fits, other | `cargo horizon-mod fits … --build 0b14f8a` | `0b14f8a  fits`, `FITS_OTHER_EXIT:0` (`sdk-fits-other.log`) |
+| gate | `python3 ports/tools/verify-sdk-package.py hostilenetworks` | **1/1** |
+| in game | `launcher-game.sh build hostilenetworks` then one leased `tools/e2e.sh` | `Compiling hostilenetworks (1 of 1)`, `PASS` + `EXIT:0` |
+| control | the same Nightly built **without** the package | `FAIL: the fabricator is minecraft:air` + `EXIT:1` |
+| selftest | `SELFTEST=1` | `FAIL: expected 1 x hostilenetworks:overworld_prediction …` + `EXIT:1` |
+| counterfactual | `NEGATIVE=1` | `FAIL: NEGATIVE: training upgraded the model to 21` + `EXIT:1` |
+| logs | `python3 ports/tools/check-e2e-logs.py hostilenetworks-e2e --strict` | `logs=4  ok=4` |
+
+Artifact: **64,607 B**, sha256 `8843ad1134f20f53917ad45fc873348b1cdf65cc4a260442ca09d65ee603c432`,
+declared version **0.2.3**, **54 entries**, no `Cargo.lock`. Every `sdk-*.log` in
+`ports/_shared/evidence/hostilenetworks/` prints the size and sha256 it ran against.
+
+`src/runtime.rs` is no longer byte-identical to the retired bundle: the 0.2.1 review fixes changed
+it first, and this slice adds `is_max`, the `CannotTrain` variant, the training finish rule and the
+`Item` → `ItemCount` rename. The port `AGENTS.md`'s "runtime never changes" line describes the
+migration, not later slices; `runtime.rs` stays the only home of gameplay rules and keeps its tests.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,verification-before-completion; BeautifulRust/rust-best-practices
+
 ## Behaviour, upstream vs this port
 
 | Area | Upstream | This port |
@@ -65,8 +173,9 @@ Model:
 | fabricator | 60 ticks × 256 FE, consume one prediction, 16 outputs | `FAB_RUNTIME`/`FAB_POWER_COST`, same |
 | fabricator selection | per-model map, Fixed and Queue modes | one `selection` + `selModel` pair (Fixed only) |
 | break | drops the whole inventory | the engine's mod-container removal drops `items`; energy is lost (as upstream) |
-| redstone | three modes, default `IGNORED` | always `IGNORED` (gap: the mode buttons are not wired) |
-| `data_gained` (kills) | model data grows on kills/blocks | **not in this slice** (gap 1) |
+| redstone | three modes, default `IGNORED` | always `IGNORED` (gap 5: the mode buttons are not wired) |
+| training mode | `+1 data` per finished run, no loot, refused at the max tier | same since 0.2.3 (`FailState::CannotTrain`) |
+| `data_gained` (kills) | model data grows on kills/blocks | **not in this slice** (gap 1; needs the Deep Learner) |
 
 The FE buffer is the pin's `native_block_entity_energy` (API 142): the amount is
 the block entity's saved int `energy`, so it survives a save and the machine's
@@ -130,25 +239,56 @@ surface:
   length) so a click works even if the menu's data slots have not reached the
   client; the labels still come from the data slots and the server rejects a row
   the model does not have.
-- Redstone control is `IGNORED` only; training mode's data write is not
-  implemented (the mode switch and its 300-tick/1.2× cost are).
+- Redstone control is `IGNORED` only; training mode is implemented (0.2.3: +1 data per run, no
+  loot, `cannot_train` at the top tier) with its 300-tick / 1.2× cost.
 - The `occludes` block field the pin's docs describe is a *pending* schema field
   at this commit (`cargo horizon-mod build` rejects it), so the machines use
   the barrel template's default occlusion.
 
 ## Gaps (next slices)
 
-1. Kill/break model upgrades (`data_gained`, the `living_death` hook, the
-   inventory/Deep Learner scan) — the tier table's `data_gained` column was
-   removed from `runtime.rs` because nothing in the slice uses it.
-2. Blank-model attunement (`rightClickToAttune`) and the Model Framework's use.
+> **0.2.3 adds the measured blockers to this list.** Gap 1 cannot be done alone: upstream's
+> `HostileEvents.forEachLearner` upgrades models **inside a Deep Learner**, so it is gap 1 + gap 4.
+> Gap 2 is `blocked(no-player-handle-on-entity-interact)`: the pin's `entity_interact_specific`
+> and `item_interact_mob` events name the entity, the kind and the held stack but **no player**
+> (`ports/_shared/sdk/0a875da/surface.json`), so a mod cannot rewrite the held stack.
+
+1. Kill/break model upgrades (`data_gained`, the `living_death`/`mob_killed` hook, the
+   **Deep Learner** scan) — needs gap 4's item container first; the killed/blocks model map is
+   the same loop as gap 3.
+2. Blank-model attunement (`rightClickToAttune`) and the Model Framework's use —
+   `blocked(no-player-handle-on-entity-interact)` at `0a875da` (see the note above).
 3. The other 58 entity and 10 block models, their optional drops and the
    silk-touch `upgrade_conditions`.
 4. Deep Learner (curio, menu, HUD) and Fabrication Directive.
 5. Data Center multiblock + Queue mode + redstone modes.
-6. Training mode's model-data upgrades.
+6. ~~Training mode's model-data upgrades~~ — **done in 0.2.3** (see Slice 2 above).
 7. The generalized predictions and the `living_matter` recipes.
 8. The chamber/fabricator GUI textures and the model-rendering item.
+
+## Review fixes (2026-11-18)
+
+The reviewer's source review of PR #1254 (`var/review-all/1254-hostilenetworks.md`) left two
+findings; both are fixed in **0.2.1** (`63643 B`, sha256 `c76c0996af962e3d702c40760855aba385e82f954a4aec0e3339377a8f295522`).
+
+- **`src/support.rs:1123` — the level-0 `info` command read machine contents at arbitrary loaded
+  coordinates.** The readout is gated on the ordinary interaction rules: an operator reads any
+  machine, a player only one within `runtime::READ_REACH` (6 blocks), any other non-operator source
+  nothing. Test: `runtime::tests::only_an_operator_or_a_nearby_player_reads_a_machine`.
+- **`src/support.rs:1350` — `take` cleared a slot before confirming a recipient, and the slot
+  helpers accepted foreign mod containers.** `take` refuses without a recipient and without an own
+  slot (`runtime::take_allowed`), `machine_slot`/`write_machine_slot` first prove the block is one of
+  this mod's machines and that the slot index is in that machine's slot count. Test:
+  `runtime::tests::a_slot_command_needs_a_recipient_and_an_own_slot`.
+
+The in-game leg also exposed two command-surface defects (fixed here, not reviewer items): the
+`model give|held|set` usages shared a `model` prefix that the dispatcher collapsed, and a `word`
+argument could not carry the namespaced id (`hostilenetworks:zombie`). They are now
+`modelgive|modelheld|modelset`, with the model as a trailing `text` argument.
+
+**In-game leg:** `ports/tools/launcher-game.sh run hostilenetworks` → `PASS` + `E2E EXIT:0`, control
+`FAIL: the fabricator is minecraft:air (did the package load?)` + `EXIT:1`, recorded in
+`ports/_shared/evidence/hostilenetworks-e2e/`.
 
 ## Verification (0.1.0, retired `.hnmod` format — historical)
 
@@ -609,3 +749,20 @@ Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-de
 > attunement, the other 68 models, the Deep Learner, the Data Center, Queue mode, redstone modes and
 > the custom GUI background. No in-game run is claimed for this version — the launcher is not
 > installed here (the 0.1.0 runs remain the behaviour's evidence).
+
+### Changelog 0.2.3 (2026-11-21)
+
+> **0.2.3 — training mode is real, and the package is re-pinned.** (0.2.2 was a local intermediate, never published: it stamped an explicit `hostilenetworks:data` 0 on a model after an **inference** run, which upstream never does; 0.2.3 gates the data write on `data_gained > 0`.) Training mode now implements
+> the other half of `SimChamberTileEntity.serverTick`: a finished 300-tick / 1.2×-energy run adds
+> one data to the model in slot 0, adds **no** base drop and **no** prediction, and still counts an
+> iteration; a self-aware model is refused with the new `FailureState.CANNOT_TRAIN`
+> (`fail cannot_train`) before the output/energy gates, in upstream's gate order (input → redstone
+> → cannot-train → output → energy). 0.2.1's training run wrongly produced the inference loot and
+> left the model's data untouched. Re-pinned from `0b14f8a` to the campaign pin **`0a875da`**
+> (mixins unchanged, `package_format` 6, `content_api` 0.2), and the pure `Item` struct renamed
+> `ItemCount` so `fits --build 0b14f8a` stops matching it to the SDK's `Item` and false-failing.
+> 31 unit tests. In game: a basic model went 20 → 21 data with no loot and exactly 299 × 154 FE
+> spent, a self-aware model answered `cannot_train` without consuming its input or its energy, all
+> three carried recipes crafted and consumed their ingredients, every carried item was given and
+> read back with an unknown id refused, and both machines dropped themselves to a survival
+> pickaxe; control `EXIT:1`, `SELFTEST=1` `EXIT:1`, `NEGATIVE=1` `EXIT:1`.
